@@ -911,6 +911,11 @@ uct_srd_iface_query(uct_iface_h tl_iface, uct_iface_attr_t *iface_attr)
     iface_attr->ep_addr_len    = 0;
     iface_attr->max_conn_priv  = 0;
 
+    if (iface->super.comp_channel != NULL) {
+        iface_attr->cap.event_flags = UCT_IFACE_FLAG_EVENT_SEND_COMP |
+                                      UCT_IFACE_FLAG_EVENT_RECV;
+    }
+
     iface_attr->latency.c += 20e-9;
     iface_attr->overhead   = 75e-9;
 
@@ -1019,6 +1024,41 @@ uct_srd_query_tl_devices(uct_md_h md, uct_tl_device_resource_t **tl_devices_p,
                                      num_tl_devices_p);
 }
 
+static ucs_status_t
+uct_srd_iface_event_arm(uct_iface_h tl_iface, unsigned events)
+{
+    uct_srd_iface_t *iface = ucs_derived_of(tl_iface, uct_srd_iface_t);
+    ucs_status_t status;
+    uint64_t dirs = 0;
+    int dir;
+
+    /* Drain any pending CQ events. Returns UCS_ERR_BUSY if events were
+     * found — the caller retries progress in that case (standard pattern). */
+    status = uct_ib_iface_pre_arm(&iface->super);
+    if (status != UCS_OK) {
+        return status;
+    }
+
+    /* Map requested event kinds to CQ directions. */
+    if (events & UCT_EVENT_SEND_COMP) {
+        dirs |= UCS_BIT(UCT_IB_DIR_TX);
+    }
+    if (events & UCT_EVENT_RECV) {
+        dirs |= UCS_BIT(UCT_IB_DIR_RX);
+    }
+
+    /* Arm each CQ. solicited_only=0 — EFA does not support solicited arm. */
+    ucs_for_each_bit(dir, dirs) {
+        ucs_assert(dir < UCT_IB_DIR_LAST);
+        status = uct_ib_iface_arm_cq(&iface->super, dir, 0);
+        if (status != UCS_OK) {
+            return status;
+        }
+    }
+
+    return UCS_OK;
+}
+
 static uct_iface_ops_t uct_srd_iface_tl_ops = {
     .ep_flush                 = uct_srd_ep_flush,
     .ep_fence                 = uct_srd_ep_fence,
@@ -1048,10 +1088,8 @@ static uct_iface_ops_t uct_srd_iface_tl_ops = {
     .iface_query              = uct_srd_iface_query,
     .iface_get_address        = uct_srd_iface_get_address,
     .iface_is_reachable       = uct_base_iface_is_reachable,
-    .iface_event_fd_get       = (uct_iface_event_fd_get_func_t)
-        ucs_empty_function_return_unsupported,
-    .iface_event_arm          = (uct_iface_event_arm_func_t)
-        ucs_empty_function_return_unsupported,
+    .iface_event_fd_get       = uct_ib_iface_event_fd_get,
+    .iface_event_arm          = uct_srd_iface_event_arm,
     .iface_close              = UCS_CLASS_DELETE_FUNC_NAME(uct_srd_iface_t),
     .iface_get_device_address = uct_ib_iface_get_device_address
 };

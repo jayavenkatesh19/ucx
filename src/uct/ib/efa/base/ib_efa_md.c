@@ -70,10 +70,11 @@ static ucs_status_t uct_ib_efa_md_open(struct ibv_device *ibv_device,
     }
 
     /*
-     * FIXME: Always disabling channel completion because of leak (gtest):
-     * - https://github.com/amzn/amzn-drivers/issues/306
+     * Enable CQ notification support for event-driven progress.
+     * Previously disabled due to an rdma-core memory leak (amzn/amzn-drivers#306),
+     * fixed in linux-rdma/rdma-core#1536 (merged January 2025).
      */
-    dev->req_notify_cq_support = 0;
+    dev->req_notify_cq_support = 1;
 
     if (md_config->enable_gpudirect_rdma != UCS_NO) {
         uct_ib_check_gpudirect_driver(
